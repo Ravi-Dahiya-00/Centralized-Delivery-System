@@ -1,0 +1,23 @@
+# Node frontend
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.env
+/frontend/.vite/
+
+# Build artifacts
+/backend/build/
+/backend/CMakeFiles/
+/backend/CMakeCache.txt
+/backend/Makefile
+/backend/*.o
+/backend/*.obj
+/backend/*.exe
+/backend/*.log
+/backend/*.pdb
+
+# IDE and OS files
+/.vscode/
+/*.swp
+/*.swo
+Thumbs.db
+.DS_Store
