@@ -1,156 +1,111 @@
-# 🚀 Centralized Delivery System
-### DSA College Project | C++ Backend + React Frontend
-
-A simulated cross-platform food delivery optimization system demonstrating:
-- **Dijkstra's Algorithm** for shortest path routing
-- **Brute-force mini-TSP** for multi-stop route ordering (pickup-before-delivery constraint)
-- **Greedy batch matching** for pairing compatible orders
-- **Priority Queue (min-heap)** as the core of Dijkstra
-- Live animated city map with rider movement
-- Analytics: earnings boost, distance saved, fuel saved (per rider + system total)
-
----
-
-## 📁 Project Structure
-```
-Centralized Delivery System/
-├── backend/          ← C++ server (DSA algorithms + REST API)
-│   ├── main.cpp
-│   ├── include/      ← Headers
-│   ├── src/          ← Implementations
-│   ├── vendor/       ← httplib.h, json.hpp (single-header libs)
-│   ├── data/
-│   │   └── city_graph.json
-│   └── CMakeLists.txt
-└── frontend/         ← React + Vite UI
-    ├── src/
-    │   ├── App.jsx
-    │   ├── components/
-    │   │   ├── CityMap.jsx          ← Animated SVG city map
-    │   │   ├── OrderTable.jsx       ← Order management
-    │   │   ├── AnalyticsDashboard.jsx ← Earnings/savings charts
-    │   │   └── ControlPanel.jsx     ← Simulation controls + turbo mode
-    │   ├── store/useStore.js        ← Zustand state
-    │   ├── api/api.js               ← HTTP client
-    │   └── hooks/useSimulation.js  ← 500ms polling hook
-    └── package.json
-```
+<div align="center">
+  <h1>🚀 Centralized Delivery System (CDS)</h1>
+  <p><b>Next-Gen Food Delivery Route Optimization & Batching Simulation</b></p>
+  
+  <p>
+    <a href="#the-problem">The Problem</a> •
+    <a href="#the-solution">The Solution</a> •
+    <a href="#features">Features</a> •
+    <a href="#algorithms-used">Algorithms</a> •
+    <a href="#getting-started">Getting Started</a> •
+    <a href="#contributing">Contributing</a>
+  </p>
+</div>
 
 ---
 
-## 🛠️ How to Build & Run
+## 🚨 The Problem: Why Food Delivery is Broken
+Currently, gig-economy food delivery operates in fragmented silos (e.g., Zomato, Swiggy, UberEats). This creates massive inefficiencies:
+- **Redundant Routes:** Five riders from different platforms might deliver to the same neighborhood simultaneously, burning 5x the fuel.
+- **Rider Burnout:** Single-order dispatches lead to low earnings per kilometer.
+- **High Carbon Footprint:** Unoptimized routing directly contributes to urban traffic congestion and emissions.
+- **High Operational Costs:** Platforms bleed money subsidizing inefficient single deliveries during rush hours.
 
-### Step 1: Build C++ Backend
+## 💡 The Solution: Centralized Batching
+What if all orders, regardless of the platform, were pooled into a **centralized network**? 
 
-**Requires:** CMake 3.16+, g++ / MSVC with C++17
+The **Centralized Delivery System (CDS)** is a high-performance simulation engine that proves the mathematical efficiency of cross-platform batching. By intelligently grouping orders heading in similar directions and assigning them to a shared fleet, CDS minimizes total travel distance, drastically reduces fuel consumption, and significantly boosts rider earnings per hour.
 
+---
+
+## ✨ Features
+
+- **⚡ High-Performance C++ Backend**: Handles real-time graph routing (Dijkstra), dynamic order generation, and state management without breaking a sweat.
+- **🧠 Smart Batching Algorithm**: Solves mini-TSP (Traveling Salesperson Problem) to calculate optimized multi-stop routes ensuring pickups always happen before deliveries.
+- **🗺️ Live React Dashboard**: Watch the algorithm work in real-time. A visual map animates riders as they navigate the city graph.
+- **📈 Rush-Hour Dynamics**: Order volume dynamically scales to replicate realistic peak hours (lunch/dinner rushes).
+- **🚀 Turbo Mode (Stress Testing)**: Instantly fast-forward up to 24 hours of traffic to stress-test the batching algorithm and generate large-scale analytics in seconds.
+- **📊 Real-Time Analytics**: Tracks the metrics that matter: fuel saved, distance saved, earnings increases, and system-wide batch efficiency.
+
+---
+
+## 🧮 Algorithms Used
+
+This project is a masterclass in applied Data Structures and Algorithms (DSA):
+
+| Concept | Implementation | Purpose |
+|---|---|---|
+| **Dijkstra's Algorithm** | `std::priority_queue` (Min-Heap) | Finding the absolute shortest path between any two intersections. |
+| **All-Pairs Shortest Path** | Distance Matrix | Precomputing paths so routing decisions happen in `O(1)` time. |
+| **Mini-TSP (Brute-force)** | Permutations | Calculating the optimal multi-stop order for a batched delivery. |
+| **Greedy Bipartite Matching** | Heuristics | Pairing compatible pending orders to the nearest available rider. |
+| **Graph Representation** | Adjacency List | Modeling the city grid, roads, shortcuts, and node weights. |
+
+---
+
+## 🛠️ Getting Started
+
+### Prerequisites
+- **Windows**: The backend includes a `build.ps1` script for compiling via MinGW-w64 (`g++` / C++17).
+- **Node.js**: Required for running the Vite frontend (v16+).
+
+### 1. Build & Run the Backend
 ```powershell
-# From project root
 cd backend
-
-# Create build directory
-mkdir build
-cd build
-
-# Configure
-cmake ..
-
-# Build
-cmake --build . --config Release
-
-# Run (from build directory — data/ is copied automatically)
-./delivery_server       # Linux/Mac
-.\delivery_server.exe   # Windows
+.\build.ps1
+.\delivery_server.exe
 ```
+*The server will start on `http://localhost:8081`*
 
-The server starts on **http://localhost:8080**
-
----
-
-### Step 2: Run Frontend
-
+### 2. Run the Frontend
 ```powershell
 cd frontend
-npm install     # first time only
+npm install
 npm run dev
 ```
-
-Open **http://localhost:5173** in your browser.
-
----
-
-## 🎮 How to Use
-
-1. Open the browser → go to **⚙️ Controls** tab
-2. Click **▶ Start** to begin live simulation
-3. Watch **🗺️ Live Map** — riders animate along routes
-4. Check **📋 Orders** — filter by status/platform
-5. View **📊 Analytics** — per-rider earnings/distance/fuel savings
-
-### Fast-Forward Mode
-- Go to **⚙️ Controls** → Fast-Forward section
-- Select hours (1–24), click **⚡ Fast-Forward**
-- Instantly processes N hours of orders + deliveries
-- Analytics immediately reflects the full period
-
-### Speed Control
-- 1× = real time
-- 2×, 5×, 10× = accelerated simulation
+*Open `http://localhost:5173` in your browser.*
 
 ---
 
-## 🧮 DSA Algorithms Used
+## 🎮 How to Use the Dashboard
 
-| Algorithm | Location | Purpose |
-|---|---|---|
-| **Dijkstra's (Min-Heap)** | `src/dijkstra.cpp` | Shortest path between any 2 nodes |
-| **All-Pairs Shortest Path** | `src/graph.cpp` | Precomputed distance matrix |
-| **Brute-force Permutation** | `src/route_optimizer.cpp` | Optimal multi-stop ordering (mini-TSP) |
-| **Greedy Matching** | `src/order_manager.cpp` | Batch 2 compatible orders together |
-| **Priority Queue** | `src/dijkstra.cpp` | `std::priority_queue<pair<int,int>, vector, greater<>>` |
-| **Adjacency List** | `src/graph.cpp` | `unordered_map<int, vector<Edge>>` |
-| **Queue** | `src/order_manager.cpp` | Pending order queue |
+1. **Start the Engine**: Navigate to the **⚙️ Controls** tab and click **▶ Start**.
+2. **Watch the Map**: Switch to the **🗺️ Live Map** to watch riders execute complex batch routes.
+3. **Speed it Up**: Adjust the simulation speed (up to 10x) to simulate a full day faster.
+4. **Turbo Mode**: Click **⚡ Fast-Forward** to simulate hours of deliveries instantly. 
+5. **View Analytics**: Check the **📊 Analytics** tab to see the exact percentage of distance and fuel saved compared to standard single-dispatch routing.
 
 ---
 
-## 📊 Analytics Metrics
+## 🤝 Contributing (Pull Requests Welcome!)
 
-### Per Rider:
-- **Earnings Increased By** = actual earnings − solo baseline earnings
-- **Earnings Increase %** = (increase / solo baseline) × 100
-- **Distance Saved** = solo distance − actual distance traveled
-- **Avg Distance Saved** = distance saved / orders delivered
-- **Fuel Saved (₹)** = distance saved × ₹1.8/km
+**This project is 100% open-source, and we are actively looking for contributors!** 
 
-### System Total:
-- All above metrics summed across all riders
-- **Batch Rate %** = batched orders / total orders × 100
-- **Orders per Hour** = total delivered / sim hours
+Whether you're a C++ wizard, a React expert, or a DSA enthusiast, we'd love your help. Here are some areas where you can contribute:
+- 🚀 **Algorithm Optimization**: Can you write a faster heuristic for the batching matching?
+- 🎨 **UI/UX**: Help make the React map and dashboard even more beautiful.
+- 🐳 **Dockerization**: Help us containerize the backend and frontend for easier cross-platform deployment.
+- 📊 **More Analytics**: Add new metrics like average delivery time, thermal loss, or carbon footprint savings.
 
----
-
-## ⚙️ Configuration (city_graph.json → config section)
-
-```json
-{
-  "config": {
-    "max_orders_per_batch": 2,
-    "max_batch_pickup_distance": 300,
-    "max_delivery_time_seconds": 2700,
-    "extra_distance_threshold_pct": 30,
-    "order_base_pay_inr": 35,
-    "distance_bonus_per_km_inr": 2.0,
-    "fuel_cost_per_km_inr": 1.8,
-    "order_interval_seconds": 12,
-    "sim_tick_ms": 800
-  }
-}
-```
+### How to Contribute
+1. **Fork** the repository.
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`).
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4. Push to the branch (`git push origin feature/AmazingFeature`).
+5. Open a **Pull Request**! We review PRs quickly.
 
 ---
 
-## 🏙️ City Map
-
-- **38 nodes**: 12 intersections, 5 Zomato restaurants, 5 Swiggy restaurants, 4 both-platform restaurants, 12 customer houses
-- **~65 edges**: Grid roads + diagonal shortcuts with meter-based weights
-- **4 riders**: Centralized pool (not platform-specific)
+<div align="center">
+  <p>Built with ❤️ by a passionate developer bridging the gap between Data Structures and real-world logistics.</p>
+</div>
