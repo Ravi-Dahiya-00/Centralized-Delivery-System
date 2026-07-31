@@ -34,6 +34,22 @@ export function useSimulation() {
           addEvent(`✅ Order #${o.id} (${o.platform}) delivered to ${o.customer_name}`)
         })
 
+        const newPicked = data.orders.filter(o =>
+          o.status === 'PICKED_UP' &&
+          !prevOrders.current.find(p => p.id === o.id && p.status === 'PICKED_UP')
+        )
+        newPicked.forEach(o => {
+          addEvent(`🥡 Order #${o.id} picked up from ${o.restaurant_name}`)
+        })
+
+        const newAssigned = data.orders.filter(o =>
+          o.status === 'ASSIGNED' &&
+          !prevOrders.current.find(p => p.id === o.id && (p.status === 'ASSIGNED' || p.status === 'PICKED_UP' || p.status === 'DELIVERED'))
+        )
+        newAssigned.forEach(o => {
+          addEvent(`🏍️ Rider heading to ${o.restaurant_name} for order #${o.id}`)
+        })
+
         const newOrders = data.orders.filter(o =>
           !prevOrders.current.find(p => p.id === o.id)
         )
@@ -42,6 +58,7 @@ export function useSimulation() {
         })
 
         prevOrders.current = data.orders
+        if (!data.orders?.length) prevOrders.current = []
       } catch {
         // Backend not started yet — silently retry
       }

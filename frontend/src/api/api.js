@@ -22,6 +22,4 @@ export const api = {
   setSpeed: (mult) => axios.post(`${BASE}/sim/speed`, { multiplier: mult }),
 
   turbo:  (hours = 8) => axios.post(`${BASE}/sim/turbo`, { hours }),
-
-  triggerOrder: () => axios.post(`${BASE}/sim/order`),
 }

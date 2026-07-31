@@ -49,6 +49,66 @@ const ROUTE_PALETTE = [
 
 const ICONS = { ZOMATO: '🍕', SWIGGY: '🍔', BOTH: '🍽️', HOUSE: '🏠' }
 
+const BUBBLE_MS = 2800
+
+/** Comic thought-cloud above a map point */
+function ThoughtBubble({ x, y, text, color = '#f8fafc', age = 0 }) {
+  const life = Math.min(1, age / BUBBLE_MS)
+  // pop in → hold → fade out
+  let opacity = 1
+  let scale = 1
+  if (life < 0.12) {
+    scale = 0.4 + (life / 0.12) * 0.6
+    opacity = life / 0.12
+  } else if (life > 0.75) {
+    opacity = Math.max(0, 1 - (life - 0.75) / 0.25)
+    scale = 1 + (life - 0.75) * 0.15
+  }
+
+  const bw = Math.max(88, text.length * 6.2 + 20)
+  const bh = 28
+  const bx = x - bw / 2
+  const by = y - RIDER_R - 52
+
+  return (
+    <g
+      style={{ pointerEvents: 'none' }}
+      opacity={opacity}
+      transform={`translate(${x}, ${by + bh}) scale(${scale}) translate(${-x}, ${-(by + bh)})`}
+    >
+      {/* Tail dots (thinking style) */}
+      <circle cx={x - 4} cy={by + bh + 10} r={3.2} fill={color} stroke="#0f172a" strokeWidth={1} />
+      <circle cx={x - 10} cy={by + bh + 18} r={2.2} fill={color} stroke="#0f172a" strokeWidth={1} />
+      <circle cx={x - 14} cy={by + bh + 24} r={1.4} fill={color} stroke="#0f172a" strokeWidth={0.8} />
+
+      {/* Cloud body */}
+      <rect
+        x={bx} y={by} width={bw} height={bh} rx={14} ry={14}
+        fill={color}
+        stroke="#0f172a"
+        strokeWidth={1.5}
+        filter="url(#bubble-shadow)"
+      />
+      {/* Soft cloud bumps */}
+      <circle cx={bx + 18} cy={by + 4} r={10} fill={color} />
+      <circle cx={bx + bw - 18} cy={by + 4} r={10} fill={color} />
+      <circle cx={bx + bw / 2} cy={by + 2} r={11} fill={color} />
+
+      <text
+        x={x}
+        y={by + bh / 2 + 1}
+        fontSize={9.5}
+        fill="#0f172a"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 800, letterSpacing: 0.2 }}
+      >
+        {text}
+      </text>
+    </g>
+  )
+}
+
 // ── Deterministic tree positions (no randomness, stable renders) ─
 function buildTrees() {
   const trees = []
@@ -87,34 +147,118 @@ export default function CityMap() {
   const prevOrderIdsRef = useRef(new Set())         // track which orders we've seen
   const pulseTimerRef = useRef(null)
 
+  // ── Thought-cloud bubbles above riders / restaurants ────────
+  const [bubbles, setBubbles] = useState([])
+  const prevOrderStatusRef = useRef({})   // { orderId: status }
+  const prevRiderStatusRef = useRef({})   // { riderId: status }
+  const bubbleSeqRef = useRef(0)
+  const [, setBubbleTick] = useState(0)   // force re-render for bubble fade
+
+  const pushBubble = useCallback((bubble) => {
+    // Only show live thought-clouds during RUNNING sim (skip turbo flood)
+    if (simState !== 'RUNNING') return
+    bubbleSeqRef.current += 1
+    const id = `b-${bubbleSeqRef.current}`
+    setBubbles(prev => [...prev, { id, born: Date.now(), ...bubble }].slice(-12))
+  }, [simState])
+
   useEffect(() => {
-    if (!graph || !orders.length) return
-    const nodeMap = Object.fromEntries(graph.nodes.map(n => [n.id, n]))
+    if (!graph) return
+    // After reset, orders clear — reset tracking so new live events work
+    if (!orders.length) {
+      prevOrderIdsRef.current = new Set()
+      prevOrderStatusRef.current = {}
+      setBubbles([])
+      return
+    }
+    const nodeMapLocal = Object.fromEntries(graph.nodes.map(n => [n.id, n]))
     const newPulses = []
+    let newOrderCount = 0
     orders.forEach(o => {
       if (!prevOrderIdsRef.current.has(o.id)) {
         prevOrderIdsRef.current.add(o.id)
-        const node = nodeMap[o.restaurant_node]
+        newOrderCount++
+        const node = nodeMapLocal[o.restaurant_node]
         if (node) {
           newPulses.push({
             id: o.id, x: node.x, y: node.y,
             color: o.platform === 'ZOMATO' ? '#e23744' : '#fc8019',
             born: Date.now(),
           })
+          if (newOrderCount <= 3) {
+            pushBubble({
+              kind: 'order',
+              nodeId: o.restaurant_node,
+              text: `Order from here! ${o.platform === 'ZOMATO' ? '🍕' : '🍔'}`,
+              color: o.platform === 'ZOMATO' ? '#fecaca' : '#fed7aa',
+            })
+          }
         }
       }
+
+      const prevStatus = prevOrderStatusRef.current[o.id]
+      if (prevStatus && prevStatus !== o.status) {
+        if (o.status === 'PICKED_UP' && o.rider_id >= 0) {
+          pushBubble({
+            kind: 'pickup',
+            riderId: o.rider_id,
+            text: 'Order picked up! ✅',
+            color: '#bbf7d0',
+          })
+        }
+        if (o.status === 'DELIVERED' && o.rider_id >= 0) {
+          pushBubble({
+            kind: 'delivered',
+            riderId: o.rider_id,
+            text: 'Order delivered! 🎉',
+            color: '#c4b5fd',
+          })
+        }
+        if (o.status === 'ASSIGNED' && o.rider_id >= 0) {
+          pushBubble({
+            kind: 'assigned',
+            riderId: o.rider_id,
+            text: `Got order #${o.id}! 📦`,
+            color: '#bae6fd',
+          })
+        }
+      }
+      prevOrderStatusRef.current[o.id] = o.status
     })
     if (newPulses.length) {
-      setPulses(prev => [...prev, ...newPulses].slice(-30)) // keep max 30
+      setPulses(prev => [...prev, ...newPulses].slice(-30))
     }
-  }, [orders, graph])
+  }, [orders, graph, pushBubble])
 
-  // Clean up expired pulses every 500ms
+  // Rider started moving (left idle)
+  useEffect(() => {
+    if (!riders.length) return
+    if (simState !== 'RUNNING') {
+      riders.forEach(r => { prevRiderStatusRef.current[r.id] = r.status })
+      return
+    }
+    riders.forEach(r => {
+      const prev = prevRiderStatusRef.current[r.id]
+      if (prev === 'IDLE' && r.status && r.status !== 'IDLE') {
+        pushBubble({
+          kind: 'started',
+          riderId: r.id,
+          text: 'Rider started here! 🏍️',
+          color: '#fef08a',
+        })
+      }
+      prevRiderStatusRef.current[r.id] = r.status
+    })
+  }, [riders, pushBubble, simState])
+
+  // Clean up expired pulses / bubbles + animate fade
   useEffect(() => {
     pulseTimerRef.current = setInterval(() => {
-      const cutoff = Date.now() - 2200
-      setPulses(prev => prev.filter(p => p.born > cutoff))
-    }, 500)
+      const now = Date.now()
+      setPulses(prev => prev.filter(p => p.born > now - 2200))
+      setBubbles(prev => prev.filter(b => b.born > now - BUBBLE_MS))
+      setBubbleTick(t => t + 1)
+    }, 80)
     return () => clearInterval(pulseTimerRef.current)
   }, [])
 
@@ -245,6 +389,9 @@ export default function CityMap() {
               </filter>
               <filter id="drop-shadow">
                 <feDropShadow dx="2" dy="2" stdDeviation="3" floodOpacity="0.5"/>
+              </filter>
+              <filter id="bubble-shadow">
+                <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#000" floodOpacity="0.35"/>
               </filter>
               {/* Road texture pattern */}
               <pattern id="road-dash" patternUnits="userSpaceOnUse" width="40" height="4">
@@ -531,6 +678,37 @@ export default function CityMap() {
                     {firstName}
                   </text>
                 </g>
+              )
+            })}
+
+            {/* ── 9. Thought-cloud bubbles ──────────────────────── */}
+            {bubbles.map(b => {
+              let bx, by
+              if (b.riderId != null) {
+                const rider = riders.find(r => r.id === b.riderId)
+                if (!rider) return null
+                const node = nodeMap[rider.current_node]
+                if (!node) return null
+                const anim = animPositions[rider.id]
+                bx = anim?.x ?? node.x
+                by = anim?.y ?? node.y
+              } else if (b.nodeId != null) {
+                const node = nodeMap[b.nodeId]
+                if (!node) return null
+                bx = node.x
+                by = node.y
+              } else {
+                return null
+              }
+              return (
+                <ThoughtBubble
+                  key={b.id}
+                  x={bx}
+                  y={by}
+                  text={b.text}
+                  color={b.color}
+                  age={Date.now() - b.born}
+                />
               )
             })}
           </svg>

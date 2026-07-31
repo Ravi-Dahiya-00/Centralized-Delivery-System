@@ -9,17 +9,16 @@
  * Computes both per-rider and system-wide statistics.
  *
  * KEY METRIC DEFINITIONS:
- *  - earnings_inr        : Actual earnings (base pay + distance bonus for all delivered orders)
- *  - solo_earnings_inr   : What earnings WOULD have been if every order was solo (no batching)
- *  - earnings_increase   : earnings_inr - solo_earnings_inr  (the bonus from batching)
- *  - distance_saved_m    : (sum of solo distances) - (actual total distance traveled)
- *  - fuel_cost_saved_inr : distance_saved_m * FUEL_RATE / 1000
+ *  - earnings_inr        : Actual earnings (base + distance bonus × rest→customer km)
+ *  - solo_earnings_inr   : Capacity-adjusted baseline — same delivery-km without batching
+ *                          would complete fewer orders → lower earnings
+ *  - earnings_increase   : earnings_inr − solo_earnings_inr
+ *  - distance_saved_km   : fair solo trip distance − actual batched route distance
+ *  - fuel_saved_inr      : distance_saved_km × fuel_rate
  *
  * EARNING MODEL:
- *  - Per order base pay: ₹35
- *  - Distance bonus: ₹2 per km (actual distance traveled in batch for that order)
- *  - Batching means more orders per hour → more base pays earned
- *  - Solo model: same ₹35 + ₹2/km but rider makes fewer orders/hour
+ *  - Per order: base_pay + distance_bonus × (restaurant→customer km)
+ *  - Batching saves route km → more orders per km → higher earnings vs solo baseline
  */
 
 struct RiderStats {

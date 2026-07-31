@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from 'react'
 import useStore from '../store/useStore'
 
-const TICK_MS    = 780   // slightly under backend tick for crisp arrivals
+// TICK_MS is now read from the backend state (Fix 9) — see store.tickIntervalMs
 const TRAIL_LEN  = 8     // number of past positions to keep per rider
 
 function easeInOut(t) {
@@ -17,8 +17,12 @@ function easeInOut(t) {
  *                    index 0 = most recent past position (fades last)
  */
 export function useRiderAnimation() {
-  const riders = useStore(s => s.riders)
-  const graph  = useStore(s => s.graph)
+  const riders        = useStore(s => s.riders)
+  const graph         = useStore(s => s.graph)
+  // FIX-9: use backend-reported tick interval so animation duration stays in sync
+  const tickIntervalMs = useStore(s => s.tickIntervalMs)
+  // 20ms headroom: animation finishes slightly before the next data poll
+  const TICK_MS = Math.max(100, tickIntervalMs - 20)
 
   const [animPositions,  setAnimPositions]  = useState({})
   const [trailPositions, setTrailPositions] = useState({})

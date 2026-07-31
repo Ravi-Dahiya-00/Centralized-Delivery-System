@@ -110,7 +110,7 @@ int main() {
     double base_pay = 35.0, dist_bonus = 2.0, fuel_rate = 1.8;
     int max_batch = 3, max_pickup_m = 500;
     double extra_pct = 40.0;
-    int solo_wait_s = 15;
+    int solo_wait_s = 15;   // default: send solo after 15 sim-seconds without a pair
     {
         std::ifstream f(GRAPH_PATH);
         json j; f >> j;
@@ -121,6 +121,7 @@ int main() {
             max_batch    = j["config"].value("max_orders_per_batch",           3);
             max_pickup_m = j["config"].value("max_batch_pickup_distance",    500);
             extra_pct    = j["config"].value("extra_distance_threshold_pct", 40.0);
+            solo_wait_s  = j["config"].value("solo_wait_before_solo_sec",     15);   // BUG-3 FIX: was hardcoded
         }
     }
 

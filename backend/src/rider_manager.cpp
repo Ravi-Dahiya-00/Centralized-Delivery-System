@@ -35,11 +35,13 @@ void RiderManager::reset() {
         rider.orders_delivered  = 0;
         rider.batches_completed = 0;
         rider.total_distance_m  = 0.0;
+        rider.delivery_distance_m = 0.0;
         rider.solo_distance_m   = 0.0;
         rider.earnings_inr      = 0.0;
         rider.solo_earnings_inr = 0.0;
         rider.fuel_cost_inr     = 0.0;
         rider.solo_fuel_cost_inr= 0.0;
+        rider.route_distance_saved_m = 0.0;
         // Restore to zone center if zones are assigned
         if (rider.zone_node >= 0) {
             rider.current_node = rider.zone_node;
@@ -105,6 +107,13 @@ int RiderManager::findNearestIdle(int target_node) const {
     return best_idx;
 }
 
+bool RiderManager::hasActiveRiders() const {
+    for (const auto& r : riders_) {
+        if (r.batch) return true;
+    }
+    return false;
+}
+
 // ─── Assign a batch to the nearest idle rider ─────────────────
 bool RiderManager::assignBatch(const BatchProposal& proposal,
                                long long sim_sec,
@@ -141,16 +150,34 @@ bool RiderManager::assignBatch(const BatchProposal& proposal,
         return false;
     }
 
+    // Fair solo baseline: deliver each order alone, sequentially, from the same start
+    // (rider → rest → cust → next rest → …). Comparable to the batched multi-stop route.
+    int fair_solo = 0;
+    int solo_pos  = rider.current_node;
+    for (int oid : proposal.order_ids) {
+        Order* o = om.findOrder(oid);
+        if (!o) continue;
+        int d1 = g.distance(solo_pos, o->restaurant_node);
+        int d2 = g.distance(o->restaurant_node, o->customer_node);
+        if (d1 == Graph::INF || d2 == Graph::INF) {
+            std::cout << "[Assign] Solo baseline unreachable — skipped.\n";
+            return false;
+        }
+        fair_solo += d1 + d2;
+        solo_pos = o->customer_node;
+    }
+
     // Build the ActiveBatch
     ActiveBatch* batch = new ActiveBatch();
-    batch->batch_id        = next_batch_id++;
-    batch->order_ids       = proposal.order_ids;
-    batch->full_path       = route.full_path;
+    batch->batch_id         = next_batch_id++;
+    batch->order_ids        = proposal.order_ids;
+    batch->full_path        = route.full_path;
     batch->total_distance_m = route.total_distance;
-    batch->solo_distance_m  = proposal.solo_total_distance_m;
-    batch->stops           = stops;
-    batch->path_index      = 0;
-    batch->stops_done      = 0;
+    batch->solo_distance_m  = fair_solo;
+    batch->stops            = stops;
+    batch->path_index       = 0;
+    batch->stops_done       = 0;
+    batch->stats_applied    = false;
 
     out_batch_id = batch->batch_id;
 
@@ -158,14 +185,21 @@ bool RiderManager::assignBatch(const BatchProposal& proposal,
     rider.status = RiderStatus::MOVING_TO_PICKUP;
 
     // Mark all orders as ASSIGNED and set metadata
+    int n = (int)proposal.order_ids.size();
     for (int oid : proposal.order_ids) {
         Order* o = om.findOrder(oid);
         if (!o) continue;
-        o->status             = OrderStatus::ASSIGNED;
-        o->batch_id           = batch->batch_id;
-        o->rider_id           = rider.id;
+        o->status              = OrderStatus::ASSIGNED;
+        o->batch_id            = batch->batch_id;
+        o->rider_id            = rider.id;
         o->assigned_at_sim_sec = sim_sec;
-        o->solo_distance_m    = g.distance(o->restaurant_node, o->customer_node);
+        // Solo trip if this order alone from rider's current position
+        int approach = g.distance(rider.current_node, o->restaurant_node);
+        int direct   = g.distance(o->restaurant_node, o->customer_node);
+        o->solo_distance_m = (approach == Graph::INF || direct == Graph::INF)
+                           ? 0 : approach + direct;
+        // Share of batched route attributed to this order (set precisely on finalize)
+        o->actual_distance_m = (n > 0) ? route.total_distance / n : 0;
         om.markAssigned(oid);
     }
 
@@ -205,7 +239,11 @@ void RiderManager::tick(long long sim_sec) {
             int edge_dist = g.distance(prev_node, rider.current_node);
             if (edge_dist != Graph::INF) {
                 rider.total_distance_m += edge_dist;
-                rider.fuel_cost_inr    += (edge_dist / 1000.0) * fuel_cost_per_km;
+                // Delivery batches only (skip empty zone-reposition trips)
+                if (!batch->order_ids.empty()) {
+                    rider.delivery_distance_m += edge_dist;
+                    rider.fuel_cost_inr += (edge_dist / 1000.0) * fuel_cost_per_km;
+                }
             }
 
             // Update visual position from node coords
@@ -218,6 +256,7 @@ void RiderManager::tick(long long sim_sec) {
             // Path complete — all stops done
             bool is_repositioning = rider.batch->order_ids.empty();
             if (!is_repositioning) {
+                applyBatchStats(rider, *batch);
                 rider.batches_completed++;
                 std::cout << "[Done] Rider '" << rider.name
                           << "' completed batch #" << batch->batch_id << "\n";
@@ -299,47 +338,81 @@ void RiderManager::returnToZone(Rider& rider) {
 }
 
 
-// ─── BUG-7 FIX: per-order distance uses solo_distance_m directly ────
-// Instead of splitting batch total equally, each order records its own
-// direct restaurant→customer Dijkstra distance as actual_distance_m.
-// The total_distance_m on the rider still accumulates real edges traveled.
+// ─── Per-order earnings; batch-level savings applied in applyBatchStats ────
 void RiderManager::finalizeOrder(Rider& rider, Order& order,
                                  bool is_solo, long long /*sim_sec*/) {
     rider.orders_delivered++;
 
-    // Per-order distance: the direct Dijkstra dist (already set in assignBatch)
-    double my_dist_m  = (double)order.solo_distance_m;
-    double my_dist_km = my_dist_m / 1000.0;
-    double solo_km    = my_dist_km;  // same baseline for solo
+    ActiveBatch* batch = rider.batch;
+    int n = (batch && !batch->order_ids.empty())
+          ? (int)batch->order_ids.size() : 1;
+    int batch_actual = (batch) ? batch->total_distance_m : order.solo_distance_m;
+    order.actual_distance_m = batch_actual / std::max(n, 1);
 
-    order.actual_distance_m = (int)my_dist_m;
-
-    // ── Actual earnings for this delivery ──────────────────
-    // Batching lets rider do more deliveries per trip — base pay per order + dist bonus
-    double earned = base_pay_inr + dist_bonus_per_km * my_dist_km;
+    // Pay is based on restaurant→customer distance (order value), not route share
+    int rest_cust = g.distance(order.restaurant_node, order.customer_node);
+    if (rest_cust == Graph::INF) rest_cust = 0;
+    double rest_cust_km = rest_cust / 1000.0;
+    double earned = base_pay_inr + dist_bonus_per_km * rest_cust_km;
     rider.earnings_inr += earned;
-    // NOTE: fuel_cost_inr is accumulated per-edge in tick() — not added here
 
-    // ── Solo baseline: what would have been earned if no batching ──
-    double solo_earned = base_pay_inr + dist_bonus_per_km * solo_km;
-    rider.solo_earnings_inr  += solo_earned;
-    rider.solo_distance_m    += order.solo_distance_m;
-    rider.solo_fuel_cost_inr += solo_km * fuel_cost_per_km;
-    // BUG-9 FIX: removed dead `if (is_solo) rider.solo_earnings_inr += 0;`
-    (void)is_solo;  // used for future per-order metadata if needed
+    (void)is_solo;
+}
+
+// ─── Batch-level distance saved + capacity-adjusted solo earnings ─────────
+void RiderManager::applyBatchStats(Rider& rider, ActiveBatch& batch) {
+    if (batch.stats_applied || batch.order_ids.empty()) return;
+    batch.stats_applied = true;
+
+    double actual_m = (double)batch.total_distance_m;
+    double solo_m   = (double)batch.solo_distance_m;
+    if (solo_m < actual_m) solo_m = actual_m;  // never credit negative "savings"
+
+    rider.solo_distance_m += solo_m;
+
+    double saved_m = solo_m - actual_m;
+    rider.route_distance_saved_m += saved_m;
+    rider.solo_fuel_cost_inr += (solo_m / 1000.0) * fuel_cost_per_km;
+
+    // Capacity model: without batching, the same delivery-km would finish fewer orders.
+    // ratio = actual/solo ≤ 1 → solo baseline earnings for this trip's work effort.
+    double batch_pay = 0.0;
+    for (int oid : batch.order_ids) {
+        Order* o = om.findOrder(oid);
+        if (!o) continue;
+        int rest_cust = g.distance(o->restaurant_node, o->customer_node);
+        if (rest_cust == Graph::INF) rest_cust = 0;
+        batch_pay += base_pay_inr + dist_bonus_per_km * (rest_cust / 1000.0);
+    }
+    double ratio = (solo_m > 0.0) ? (actual_m / solo_m) : 1.0;
+    if (ratio > 1.0) ratio = 1.0;
+    rider.solo_earnings_inr += batch_pay * ratio;
 }
 
 // ─── Build analytics snapshot ─────────────────────────────────
 SystemAnalytics RiderManager::buildAnalytics(long long sim_sec,
                                               long long real_elapsed_ms,
                                               int total_placed,
-                                              int total_cancelled) const {
+                                              int /*total_cancelled*/) const {
     SystemAnalytics sa;
     sa.simulation_time_sec    = sim_sec;
     sa.real_time_elapsed_ms   = real_elapsed_ms;
     sa.total_orders_placed    = total_placed;
-    sa.total_cancelled        = total_cancelled;
 
+    // BUG-4 FIX: compute cancelled count from actual order status instead of
+    // always receiving 0 from the call site.
+    for (const auto& o : om.allOrders())
+        if (o.status == OrderStatus::CANCELLED) sa.total_cancelled++;
+
+    // ── Build batch-frequency map once (used for both system & per-rider splits) ──
+    // BUG-6 FIX: needed here so per-rider solo/batched counts can be derived.
+    std::unordered_map<int, int> batch_freq;
+    for (const auto& o : om.allOrders()) {
+        if (o.status == OrderStatus::DELIVERED && o.batch_id >= 0)
+            batch_freq[o.batch_id]++;
+    }
+
+    // ── Per-rider pass ───────────────────────────────────────
     for (const auto& rider : riders_) {
         RiderStats rs;
         rs.rider_id   = rider.id;
@@ -347,12 +420,9 @@ SystemAnalytics RiderManager::buildAnalytics(long long sim_sec,
         rs.orders_delivered   = rider.orders_delivered;
         rs.batches_completed  = rider.batches_completed;
 
-        rs.actual_distance_km = rider.total_distance_m / 1000.0;
-        rs.solo_distance_km   = rider.solo_distance_m  / 1000.0;
-        // BUG: distance_saved can go negative if actual > solo (rider did detours)
-        // Clamp to 0 to avoid confusing negative values in UI
-        double raw_saved = (rider.solo_distance_m - rider.total_distance_m) / 1000.0;
-        rs.distance_saved_km  = std::max(0.0, raw_saved);
+        rs.actual_distance_km = rider.delivery_distance_m / 1000.0;
+        rs.solo_distance_km   = rider.solo_distance_m / 1000.0;
+        rs.distance_saved_km  = rider.route_distance_saved_m / 1000.0;
 
         rs.earnings_inr       = rider.earnings_inr;
         rs.solo_earnings_inr  = rider.solo_earnings_inr;
@@ -363,14 +433,38 @@ SystemAnalytics RiderManager::buildAnalytics(long long sim_sec,
 
         rs.fuel_cost_inr      = rider.fuel_cost_inr;
         rs.solo_fuel_cost_inr = rider.solo_fuel_cost_inr;
-        rs.fuel_saved_inr     = rider.solo_fuel_cost_inr - rider.fuel_cost_inr;
+        rs.fuel_saved_inr     = rs.solo_fuel_cost_inr - rs.fuel_cost_inr;
+        if (rs.fuel_saved_inr < 0) rs.fuel_saved_inr = 0;
 
         double hours = sim_sec / 3600.0;
         rs.orders_per_hour = (hours > 0) ? rider.orders_delivered / hours : 0.0;
 
+        // BUG-6 FIX: compute per-rider solo vs. batched order split
+        // BUG-5 FIX: accumulate delivery times for avg_delivery_time_min
+        double delivery_time_sum_min = 0.0;
+        int    delivery_time_count   = 0;
+        for (const auto& o : om.allOrders()) {
+            if (o.status != OrderStatus::DELIVERED) continue;
+            if (o.rider_id != rider.id)             continue;
+            // solo vs batched classification
+            if (o.batch_id < 0 || batch_freq.count(o.batch_id) == 0 ||
+                batch_freq.at(o.batch_id) == 1)
+                rs.solo_orders++;
+            else
+                rs.batched_orders++;
+            // delivery time
+            if (o.delivered_at_sim_sec > 0 && o.placed_at_sim_sec >= 0) {
+                delivery_time_sum_min +=
+                    (o.delivered_at_sim_sec - o.placed_at_sim_sec) / 60.0;
+                delivery_time_count++;
+            }
+        }
+        // BUG-5 FIX: set per-rider average delivery time
+        rs.avg_delivery_time_min = (delivery_time_count > 0)
+            ? delivery_time_sum_min / delivery_time_count : 0.0;
+
         sa.rider_stats.push_back(rs);
 
-        // Accumulate system totals
         sa.total_orders_delivered    += rider.orders_delivered;
         sa.total_distance_km         += rs.actual_distance_km;
         sa.total_solo_distance_km    += rs.solo_distance_km;
@@ -379,55 +473,46 @@ SystemAnalytics RiderManager::buildAnalytics(long long sim_sec,
         sa.total_solo_earnings_inr   += rs.solo_earnings_inr;
         sa.total_fuel_cost_inr       += rs.fuel_cost_inr;
         sa.total_fuel_saved_inr      += rs.fuel_saved_inr;
+        sa.total_batches             += rider.batches_completed;
     }
 
-    // BUG-8 FIX: compute batch_rate_pct from actual order data
+    // ── System-wide batched / solo counts + avg delivery time ───────────────
     {
-        int batched_count = 0;
-        int solo_count    = 0;
+        int batched_count = 0, solo_count = 0;
+        double delivery_time_sum_min = 0.0;
+        int    delivery_time_count   = 0;
         for (const auto& o : om.allOrders()) {
             if (o.status != OrderStatus::DELIVERED) continue;
-            // Solo = batch of 1 order. We detect by checking if batch_id exists
-            // but we count all delivered orders — those in batches of >1 are "batched"
-            // Use solo_distance_m == actual_distance_m as a proxy (set equal for solo)
-            if (o.batch_id >= 0) {
-                // Count orders in their batch — we approximate:
-                // any order with batch_id that was batched with another = batched
-                // For now track: delivered alone vs delivered in multi-order batch
-                // We check by counting how many orders share the same batch_id
-                batched_count++;  // will be refined below
-            } else {
-                solo_count++;
-            }
-        }
-        // Better: count orders sharing a batch_id > 1 using a frequency map
-        std::unordered_map<int, int> batch_freq;
-        for (const auto& o : om.allOrders()) {
-            if (o.status == OrderStatus::DELIVERED && o.batch_id >= 0)
-                batch_freq[o.batch_id]++;
-        }
-        batched_count = 0; solo_count = 0;
-        for (const auto& o : om.allOrders()) {
-            if (o.status != OrderStatus::DELIVERED) continue;
-            if (o.batch_id < 0 || batch_freq[o.batch_id] == 1)
+            if (o.batch_id < 0 || batch_freq.count(o.batch_id) == 0 ||
+                batch_freq.at(o.batch_id) == 1)
                 solo_count++;
             else
                 batched_count++;
+            // BUG-5 FIX: accumulate for system-wide avg delivery time
+            if (o.delivered_at_sim_sec > 0 && o.placed_at_sim_sec >= 0) {
+                delivery_time_sum_min +=
+                    (o.delivered_at_sim_sec - o.placed_at_sim_sec) / 60.0;
+                delivery_time_count++;
+            }
         }
         sa.total_batched_orders = batched_count;
         sa.total_solo_orders    = solo_count;
+        // BUG-5 FIX: set system-wide average delivery time
+        sa.avg_delivery_time_min = (delivery_time_count > 0)
+            ? delivery_time_sum_min / delivery_time_count : 0.0;
+
         if (sa.total_orders_delivered > 0)
             sa.batch_rate_pct = 100.0 * batched_count / sa.total_orders_delivered;
     }
 
-    // System-level derived metrics
     sa.total_earnings_increase = sa.total_earnings_inr - sa.total_solo_earnings_inr;
     sa.earnings_increase_pct   = (sa.total_solo_earnings_inr > 0)
         ? (sa.total_earnings_increase / sa.total_solo_earnings_inr) * 100.0
         : 0.0;
 
     if (sa.total_solo_distance_km > 0)
-        sa.avg_distance_saved_pct = (sa.total_distance_saved_km / sa.total_solo_distance_km) * 100.0;
+        sa.avg_distance_saved_pct =
+            (sa.total_distance_saved_km / sa.total_solo_distance_km) * 100.0;
 
     double hours = sim_sec / 3600.0;
     sa.system_orders_per_hour = (hours > 0)

@@ -31,7 +31,7 @@ if(WIN32)
     # Windows: link ws2_32 for socket support (needed by httplib)
     target_link_libraries(delivery_server PRIVATE ws2_32)
     target_compile_definitions(delivery_server PRIVATE
-        _WIN32_WINNT=0x0601
+        _WIN32_WINNT=0x0A00
         NOMINMAX
     )
 else()

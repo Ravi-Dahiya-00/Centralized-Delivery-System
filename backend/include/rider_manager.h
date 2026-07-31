@@ -58,6 +58,8 @@ public:
     std::vector<Rider>& riders() { return riders_; }
     const std::vector<Rider>& riders() const { return riders_; }
 
+    bool hasActiveRiders() const;
+
 private:
     const Graph&    g;
     OrderManager&   om;
@@ -78,6 +80,9 @@ private:
 
     // Finalize a delivered order — update analytics on the rider
     void finalizeOrder(Rider& rider, Order& order, bool is_solo, long long sim_sec);
+
+    // Apply batch-level distance / solo-baseline earnings once when trip ends
+    void applyBatchStats(Rider& rider, ActiveBatch& batch);
 
     // Send idle rider back toward their zone center
     void returnToZone(Rider& rider);

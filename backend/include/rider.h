@@ -7,11 +7,11 @@
 
 // ─── Rider Status ─────────────────────────────────────────────
 enum class RiderStatus {
-    IDLE,           // waiting for orders
-    MOVING_TO_PICKUP,
-    PICKING_UP,     // at restaurant, collecting order
-    MOVING_TO_DELIVERY,
-    DELIVERING      // at customer door
+    IDLE,                // waiting for orders
+    MOVING_TO_PICKUP,    // riding to restaurant
+    MOVING_TO_DELIVERY,  // riding to customer
+    // NOTE: PICKING_UP and DELIVERING were removed (Bug 14 fix) —
+    // riders never dwelt in those states; the transition was instant.
 };
 std::string riderStatusToString(RiderStatus s);
 
@@ -22,9 +22,10 @@ struct ActiveBatch {
     std::vector<int>   full_path;       // node-by-node route
     int                path_index = 0;  // current position in path
     int                total_distance_m;
-    int                solo_distance_m; // sum of solo distances for all orders
+    int                solo_distance_m; // fair solo trips from rider start (same start as batch)
     std::vector<Stop>  stops;           // ordered stops
     int                stops_done = 0;
+    bool               stats_applied = false; // batch-level analytics applied once
 };
 
 // ─── Rider ────────────────────────────────────────────────────
@@ -44,15 +45,17 @@ struct Rider {
     // ── Lifetime Statistics ──────────────────────────────────
     int    orders_delivered     = 0;
     int    batches_completed    = 0;
-    double total_distance_m     = 0.0;   // actual distance traveled
-    double solo_distance_m      = 0.0;   // what distance would be if all solo
-    double earnings_inr         = 0.0;   // actual earnings
-    double solo_earnings_inr    = 0.0;   // what earnings would be without batching
-    double fuel_cost_inr        = 0.0;   // actual fuel cost
-    double solo_fuel_cost_inr   = 0.0;   // fuel cost without batching
+    double total_distance_m     = 0.0;   // all travel (deliveries + zone reposition)
+    double delivery_distance_m  = 0.0;   // distance on delivery batches only
+    double solo_distance_m      = 0.0;   // fair solo baseline for delivered batches
+    double earnings_inr         = 0.0;   // actual earnings (all delivered orders)
+    double solo_earnings_inr    = 0.0;   // capacity-adjusted solo baseline
+    double fuel_cost_inr        = 0.0;   // delivery fuel only
+    double solo_fuel_cost_inr   = 0.0;   // solo-baseline fuel
+    double route_distance_saved_m = 0.0; // fair_solo − batched_route (deliveries)
 
     // ── Derived Metrics ────────────────────────────────────
-    double distanceSaved()  const { return solo_distance_m  - total_distance_m; }
-    double earningsBoosted() const { return earnings_inr    - solo_earnings_inr; }
+    double distanceSaved()  const { return route_distance_saved_m; }
+    double earningsBoosted() const { return earnings_inr - solo_earnings_inr; }
     double fuelSaved()      const { return solo_fuel_cost_inr - fuel_cost_inr; }
 };

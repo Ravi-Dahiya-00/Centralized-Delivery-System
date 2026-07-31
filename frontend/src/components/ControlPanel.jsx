@@ -2,6 +2,13 @@ import React, { useState } from 'react'
 import { api } from '../api/api'
 import useStore from '../store/useStore'
 
+// Rush-hour demand range (from simulator.cpp getRushMultiplier):
+// quietest = 0.2x (night), busiest = 3.0x (lunch peak)
+// Base: ~1 order per 12 sim-seconds at 1x multiplier
+const BASE_INTERVAL_SEC = 12
+const MIN_MULT = 0.2
+const MAX_MULT = 3.0
+
 const SPEEDS = [
   { label: '1×',  value: 1   },
   { label: '2×',  value: 2   },
@@ -22,7 +29,6 @@ export default function ControlPanel() {
   const handlePause   = () => isRunning ? api.pause() : api.resume()
   const handleReset   = () => api.reset()
   const handleSpeed   = (v) => api.setSpeed(v)
-  const handleTrigger = () => api.triggerOrder()
 
   const handleTurbo = async () => {
     setTurboLoading(true)
@@ -58,9 +64,6 @@ export default function ControlPanel() {
           </button>
           <button className="btn btn-ghost" onClick={handleReset}>
             ↺ Reset
-          </button>
-          <button className="btn btn-primary" onClick={handleTrigger} disabled={!isRunning}>
-            + Manual Order
           </button>
         </div>
 
@@ -120,7 +123,10 @@ export default function ControlPanel() {
             }}
           />
           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            ≈ {Math.round(turboHours * 3600 / 12)} orders
+            {/* FIX-12: show a min–max range to account for rush-hour multiplier variation */}
+            ≈ {Math.round(turboHours * 3600 / BASE_INTERVAL_SEC * MIN_MULT)}–
+              {Math.round(turboHours * 3600 / BASE_INTERVAL_SEC * MAX_MULT)} orders
+            <span style={{ fontSize: 10, opacity: 0.6 }}> (varies with rush hour)</span>
           </span>
         </div>
 
@@ -151,8 +157,7 @@ export default function ControlPanel() {
           padding: '8px 12px', background: 'var(--bg-glass)',
           borderRadius: 6, border: '1px solid var(--border)'
         }}>
-          ℹ️ Turbo mode generates all orders immediately, then assigns & processes them.
-          Analytics will reflect the full {turboHours}-hour period.
+          ℹ️ Fast-forward runs the same simulation as Start (batching, riders, analytics) — just skips the wait. Use 4–8 hours to include lunch/dinner peaks where batching is highest.
         </div>
       </div>
 

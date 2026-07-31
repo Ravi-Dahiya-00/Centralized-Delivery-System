@@ -1,7 +1,10 @@
 #include "../include/simulator.h"
+#include "../include/rider_manager.h"
+#include "../include/order.h"
 #include <iostream>
 #include <stdexcept>
 #include <cmath>
+#include <unordered_map>
 
 // ─── Rush Hour Demand Multiplier ──────────────────────────────────
 // Returns a value 0.0–1.0 representing "how often" to generate orders.
@@ -97,6 +100,10 @@ void Simulator::start()  { state_ = SimState::RUNNING; }
 void Simulator::pause()  { state_ = SimState::PAUSED;  }
 void Simulator::resume() { state_ = SimState::RUNNING; }
 void Simulator::stop()   {
+    state_ = SimState::STOPPED;
+}
+
+void Simulator::reset() {
     state_          = SimState::STOPPED;
     sim_time_sec_   = 0;
     last_order_sim_sec = 0;
@@ -107,9 +114,14 @@ void Simulator::setSpeed(double multiplier) {
     cfg_.speed_multiplier = multiplier;
 }
 
+// Expose the current rush-hour multiplier for the API (single source of truth).
+double Simulator::rushMultiplier() const {
+    return getRushMultiplier(sim_time_sec_);
+}
+
 // ─── Normal tick ──────────────────────────────────────────────
 bool Simulator::tick(long long& out_sim_sec) {
-    if (state_ != SimState::RUNNING) {
+    if (state_ != SimState::RUNNING && state_ != SimState::TURBO) {
         out_sim_sec = sim_time_sec_;
         return false;
     }
@@ -136,33 +148,77 @@ bool Simulator::tick(long long& out_sim_sec) {
     return generated;
 }
 
-// ─── Turbo Mode: simulate N hours instantly ───────────────────
-// BUG-13 FIX: applies getRushMultiplier() so demand follows peaks/troughs
-int Simulator::turboSimulate(int hours) {
+// ─── Turbo Mode: fast-forward N hours using the same logic as main loop ──
+static void runDeliveryStep(OrderManager& om, RiderManager& rm, long long sim_sec) {
+    auto proposals = om.processPending(sim_sec);
+    for (const auto& proposal : proposals) {
+        int batch_id = -1;
+        rm.assignBatch(proposal, sim_sec, batch_id);
+    }
+    rm.tick(sim_sec);
+}
+
+static long long simAdvanceSec(const SimConfig& cfg) {
+    long long sim_advance =
+        (long long)(cfg.tick_interval_ms * cfg.speed_multiplier / 1000.0);
+    return sim_advance < 1 ? 1 : sim_advance;
+}
+
+static bool hasDeliveryWork(const OrderManager& om, const RiderManager& rm) {
+    return om.hasPendingOrders() || rm.hasActiveRiders();
+}
+
+int Simulator::turboSimulate(int hours, RiderManager& rm) {
     state_ = SimState::TURBO;
     long long end_time = sim_time_sec_ + (long long)hours * 3600;
+    long long sim_advance = simAdvanceSec(cfg_);
 
     int orders_before = total_generated_;
 
-    std::cout << "[Turbo] Simulating " << hours << " hours ("
-              << end_time << " sim seconds)...\n";
+    std::cout << "[Turbo] Fast-forwarding " << hours << " hours ("
+              << end_time << " sim sec) using normal tick logic...\n";
 
+    // Phase 1: same loop as main.cpp — tick → batch → assign → move (1 edge/tick)
     while (sim_time_sec_ < end_time) {
-        sim_time_sec_ += (long long)cfg_.order_interval_sec;
+        long long sim_sec;
+        tick(sim_sec);
+        runDeliveryStep(om, rm, sim_sec);
+    }
 
-        // Apply rush multiplier for realistic demand distribution
-        double rush = getRushMultiplier(sim_time_sec_);
-        long long effective_interval = (long long)(cfg_.order_interval_sec / std::max(rush, 0.05));
-        if (effective_interval < 1) effective_interval = 1;
-
-        if (sim_time_sec_ - last_order_sim_sec >= effective_interval) {
-            generateOrder();
-        }
+    // Phase 2: finish in-flight deliveries (no new orders)
+    long long drain_limit = end_time + (long long)cfg_.max_delivery_time_sec * 2;
+    while (hasDeliveryWork(om, rm) && sim_time_sec_ < drain_limit) {
+        sim_time_sec_ += sim_advance;
+        runDeliveryStep(om, rm, sim_time_sec_);
     }
 
     int generated = total_generated_ - orders_before;
-    std::cout << "[Turbo] Done. Generated " << generated << " orders in "
-              << hours << " sim-hours.\n";
+
+    // BUG-7 FIX: capture per-rider delivered counts BEFORE turbo started (stored
+    // as orders_before equivalents) so we can report a delta, not all-time totals.
+    // We stored nothing before, so derive the delta from the order list instead —
+    // count DELIVERED orders whose placed_at_sim_sec falls in the turbo window.
+    long long turbo_start_sec = end_time - (long long)hours * 3600;
+    int delivered = 0;
+    int batched   = 0;
+    std::unordered_map<int, int> batch_freq;
+    for (const auto& o : om.allOrders()) {
+        if (o.status == OrderStatus::DELIVERED && o.batch_id >= 0)
+            batch_freq[o.batch_id]++;
+    }
+    for (const auto& o : om.allOrders()) {
+        if (o.status != OrderStatus::DELIVERED) continue;
+        if (o.placed_at_sim_sec < turbo_start_sec) continue;  // from a previous run
+        delivered++;
+        if (o.batch_id >= 0 && batch_freq[o.batch_id] > 1)
+            batched++;
+    }
+
+    std::cout << "[Turbo] Done. Generated " << generated
+              << ", delivered " << delivered
+              << ", batched " << batched
+              << " (" << (delivered > 0 ? 100 * batched / delivered : 0) << "%)"
+              << ", sim time=" << sim_time_sec_ << "s\n";
 
     state_ = SimState::STOPPED;
     return generated;

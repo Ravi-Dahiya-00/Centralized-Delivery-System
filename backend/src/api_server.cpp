@@ -55,14 +55,27 @@ json ApiServer::graphToJson() const {
     return jg;
 }
 
+// ─── Safe node-name lookup (guards against non-contiguous or OOB node IDs) ──
+static std::string safeNodeName(const Graph& g, int node_id) {
+    if (node_id < 0 || node_id >= (int)g.nodes.size()) return "";
+    // Node IDs equal their vector index only when the graph is loaded sequentially.
+    // Verify the stored id matches before trusting the slot.
+    if (g.nodes[node_id].id != node_id) {
+        for (const auto& n : g.nodes)
+            if (n.id == node_id) return n.name;
+        return "";
+    }
+    return g.nodes[node_id].name;
+}
+
 json ApiServer::orderToJson(const Order& o) const {
     return {
         {"id",               o.id},
         {"platform",         platformToString(o.platform)},
         {"restaurant_node",  o.restaurant_node},
-        {"restaurant_name",  g.nodes[o.restaurant_node].name},
+        {"restaurant_name",  safeNodeName(g, o.restaurant_node)},
         {"customer_node",    o.customer_node},
-        {"customer_name",    g.nodes[o.customer_node].name},
+        {"customer_name",    safeNodeName(g, o.customer_node)},
         {"status",           orderStatusToString(o.status)},
         {"batch_id",         o.batch_id},
         {"rider_id",         o.rider_id},
@@ -85,12 +98,13 @@ json ApiServer::riderToJson(const Rider& r) const {
         {"y",               r.y},
         {"status",          riderStatusToString(r.status)},
         {"orders_delivered",r.orders_delivered},
-        {"total_distance_km", r.total_distance_m / 1000.0},
+        {"total_distance_km", r.delivery_distance_m / 1000.0},
         {"earnings_inr",    r.earnings_inr},
         {"solo_earnings_inr", r.solo_earnings_inr},
         {"earnings_increase",  r.earningsBoosted()},
-        {"distance_saved_km", r.distanceSaved() / 1000.0},
-        {"fuel_saved_inr",  r.fuelSaved()},
+        {"distance_saved_km", r.route_distance_saved_m / 1000.0},
+        {"fuel_cost_inr",   r.fuel_cost_inr},
+        {"fuel_saved_inr",  r.fuelSaved() > 0 ? r.fuelSaved() : 0.0},
         {"zone_id",         r.zone_id},
         {"zone_node",       r.zone_node},
         {"idle_ticks",      r.idle_ticks},
@@ -167,13 +181,19 @@ json ApiServer::buildState() {
     );
 
     json state;
-    state["sim_time_sec"]   = sim_sec;
-    state["real_elapsed_ms"]= real_elapsed;
-    state["sim_state"]      = (sim.state() == SimState::RUNNING) ? "RUNNING"
-                            : (sim.state() == SimState::PAUSED)  ? "PAUSED"
-                            : (sim.state() == SimState::TURBO)   ? "TURBO"
-                            : "STOPPED";
-    state["speed_multiplier"] = sim.config().speed_multiplier;
+    state["sim_time_sec"]    = sim_sec;
+    state["real_elapsed_ms"] = real_elapsed;
+    state["sim_state"]       = (sim.state() == SimState::RUNNING) ? "RUNNING"
+                             : (sim.state() == SimState::PAUSED)  ? "PAUSED"
+                             : (sim.state() == SimState::TURBO)   ? "TURBO"
+                             : "STOPPED";
+    state["speed_multiplier"]  = sim.config().speed_multiplier;
+    // FIX-9: expose backend tick so frontend animation stays in sync even if
+    //         tick_interval_ms is changed via city_graph.json config.
+    state["tick_interval_ms"]  = sim.config().tick_interval_ms;
+    // FIX-10: send the live rush-hour multiplier computed by the backend so the
+    //          frontend never needs its own duplicate multiplier table.
+    state["rush_multiplier"]   = sim.rushMultiplier();
 
     // Orders
     json orders = json::array();
@@ -246,28 +266,28 @@ void ApiServer::run() {
     // ── POST /api/sim/start ──────────────────────────────────
     svr.Post("/api/sim/start", [&](const httplib::Request&, httplib::Response& res) {
         setCORS(res);
-        sim.start();
+        { std::lock_guard<std::mutex> lock(mutex_); sim.start(); }
         res.set_content(R"({"status":"started"})", "application/json");
     });
 
     // ── POST /api/sim/stop ───────────────────────────────────
     svr.Post("/api/sim/stop", [&](const httplib::Request&, httplib::Response& res) {
         setCORS(res);
-        sim.stop();
+        { std::lock_guard<std::mutex> lock(mutex_); sim.stop(); }
         res.set_content(R"({"status":"stopped"})", "application/json");
     });
 
     // ── POST /api/sim/pause ──────────────────────────────────
     svr.Post("/api/sim/pause", [&](const httplib::Request&, httplib::Response& res) {
         setCORS(res);
-        sim.pause();
+        { std::lock_guard<std::mutex> lock(mutex_); sim.pause(); }
         res.set_content(R"({"status":"paused"})", "application/json");
     });
 
     // ── POST /api/sim/resume ─────────────────────────────────
     svr.Post("/api/sim/resume", [&](const httplib::Request&, httplib::Response& res) {
         setCORS(res);
-        sim.resume();
+        { std::lock_guard<std::mutex> lock(mutex_); sim.resume(); }
         res.set_content(R"({"status":"resumed"})", "application/json");
     });
 
@@ -291,9 +311,10 @@ void ApiServer::run() {
     svr.Post("/api/sim/turbo", [&](const httplib::Request& req, httplib::Response& res) {
         setCORS(res);
         try {
+            std::lock_guard<std::mutex> lock(mutex_);
             auto j    = json::parse(req.body);
             int hours = j.value("hours", 8);
-            int count = sim.turboSimulate(hours);
+            int count = sim.turboSimulate(hours, rm);
             res.set_content(
                 json{{"status","done"},{"orders_generated",count},{"hours",hours}}.dump(),
                 "application/json");
@@ -308,7 +329,7 @@ void ApiServer::run() {
     svr.Post("/api/sim/reset", [&](const httplib::Request&, httplib::Response& res) {
         setCORS(res);
         std::lock_guard<std::mutex> lock(mutex_);
-        sim.stop();
+        sim.reset();
         rm.reset();           // free in-flight batch memory, reset stats
         om.resetOrders();     // clear all orders and pending queue
         start_real_ms_ = nowMs();

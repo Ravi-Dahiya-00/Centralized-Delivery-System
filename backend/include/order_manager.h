@@ -66,6 +66,7 @@ public:
     // Next order ID
     int nextOrderId() { return next_order_id++; }
 
+    bool hasPendingOrders() const { return !pending_ids.empty(); }
 
 private:
     const Graph&  g;

@@ -33,6 +33,10 @@ const useStore = create((set, get) => ({
   simState: 'STOPPED',   // RUNNING | PAUSED | STOPPED | TURBO
   simTimeSec: 0,
   speedMultiplier: 1.0,
+  // FIX-9: backend tick interval (ms) — used by animation hook instead of hardcoded 780
+  tickIntervalMs: 800,
+  // FIX-10: rush-hour multiplier reported by backend — single source of truth
+  rushMult: 1.0,
 
   setLiveState: (data) => {
     const prev = get()
@@ -64,6 +68,8 @@ const useStore = create((set, get) => ({
       simState:         data.sim_state       ?? 'STOPPED',
       simTimeSec:       newTimeSec,
       speedMultiplier:  data.speed_multiplier ?? 1.0,
+      tickIntervalMs:   data.tick_interval_ms ?? 800,   // FIX-9
+      rushMult:         data.rush_multiplier  ?? 1.0,   // FIX-10
       analyticsHistory: newHistory,
     })
   },

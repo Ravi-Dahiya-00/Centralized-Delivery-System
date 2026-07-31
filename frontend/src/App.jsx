@@ -18,7 +18,9 @@ export default function App() {
   const simSecs  = simTimeSec % 60
   const simTimeStr = `${String(simHours).padStart(2,'0')}:${String(simMins).padStart(2,'0')}:${String(simSecs).padStart(2,'0')}`
 
-  // Rush hour info — only meaningful when running
+  // FIX-10: backend rush multiplier (single source of truth); still use
+  // getRushInfo() for colors/emoji/phase label which are presentation-only.
+  const { riders, rushMult } = useStore(s => ({ riders: s.riders, rushMult: s.rushMult }))
   const rush = isRunning ? getRushInfo(simTimeSec) : null
 
   const TABS = [
@@ -67,7 +69,8 @@ export default function App() {
               transition: 'all 0.6s ease',
             }}>
               {rush.emoji} {rush.phase}
-              <span style={{ opacity: 0.7, fontWeight: 400 }}>{rush.mult}×</span>
+              {/* FIX-10: display the backend-reported multiplier, not the frontend's copy */}
+              <span style={{ opacity: 0.7, fontWeight: 400 }}>{rushMult.toFixed(1)}×</span>
             </span>
           )}
 
@@ -84,7 +87,7 @@ export default function App() {
           )}
 
           <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-            Zomato + Swiggy · 6 Riders
+            Zomato + Swiggy · {riders.length} Rider{riders.length !== 1 ? 's' : ''}
           </span>
         </div>
       </nav>

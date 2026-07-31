@@ -4,6 +4,8 @@
 #include <random>
 #include <string>
 
+class RiderManager;
+
 /*
  * Simulator
  * ─────────
@@ -14,10 +16,10 @@
  *  - real_time_ms: actual wall clock time elapsed
  *  - speed_multiplier: 1.0 = real time, 10.0 = 10x fast, etc.
  *
- * TURBO MODE (8-hour fast forward):
- *  - Runs 8 * 3600 = 28,800 simulation seconds instantly
- *  - Processes all ticks at max speed (no sleep between ticks)
- *  - Useful for generating a full day's data quickly
+ * TURBO MODE (fast-forward):
+ *  - Runs the exact same tick loop as normal simulation (no sleep)
+ *  - Batching, rider movement, and analytics behave identically
+ *  - Useful for previewing 1–8 hours of analytics instantly
  *
  * ORDER GENERATION:
  *  - Orders generated every `order_interval_sec` sim seconds
@@ -48,12 +50,15 @@ public:
     void pause();
     void resume();
 
-    // Stop and reset
+    // Stop
     void stop();
 
-    // Instantly simulate N simulation-hours worth of orders
+    // Full reset of time and counters
+    void reset();
+
+    // Instantly simulate N simulation-hours: generate orders and deliver them
     // Returns how many orders were generated
-    int turboSimulate(int hours = 8);
+    int turboSimulate(int hours, RiderManager& rm);
 
     // Set speed multiplier (1x, 2x, 5x, 10x)
     void setSpeed(double multiplier);
@@ -68,6 +73,10 @@ public:
     SimConfig& config()               { return cfg_; }
 
     int totalOrdersGenerated()  const { return total_generated_; }
+
+    // Returns the current rush-hour demand multiplier (0.2 – 3.0).
+    // Exposed so the API can send it to the frontend without duplicating the table.
+    double rushMultiplier()     const;
 
 private:
     const Graph&   g;

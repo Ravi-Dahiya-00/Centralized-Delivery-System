@@ -108,7 +108,27 @@ OptimizedRoute RouteOptimizer::optimize(int rider_node,
             result.stop_sequence.push_back(stops[idx].node_id);
 
         // Build full path with all intermediate nodes
-        result.full_path = expandPath(rider_node, best_perm, stops);
+        result.full_path = expandPath(rider_node, best_perm, stops);\
+
+        // BUG-13 FIX: compute solo_distance and savings_meters.
+        // solo_distance = sum of (pickup → delivery) for each order independently.
+        // We pair each delivery stop with its matching pickup stop.
+        int solo_dist = 0;
+        for (const auto& s : stops) {
+            if (s.is_pickup) {
+                // Find the delivery stop for the same order_id
+                for (const auto& d : stops) {
+                    if (!d.is_pickup && d.order_id == s.order_id) {
+                        int seg = g.distance(s.node_id, d.node_id);
+                        if (seg != Graph::INF) solo_dist += seg;
+                        break;
+                    }
+                }
+            }
+        }
+        result.solo_distance  = solo_dist;
+        result.savings_meters = (double)solo_dist - (double)best_dist;
+        if (result.savings_meters < 0) result.savings_meters = 0.0;
 
         // Human-readable description
         std::ostringstream desc;
